@@ -12,12 +12,16 @@ const nextConfig: NextConfig = {
         hostname: "**",
       },
     ],
-    // Vercel handles image optimization
-    unoptimized: process.env.NODE_ENV === "development",
   },
 
   // Disable x-powered-by header for security
   poweredByHeader: false,
+
+  // Enable Turbopack (Next.js 16 default)
+  turbopack: {},
+
+  // Server external packages
+  serverExternalPackages: ["pdf-parse"],
 
   // Configure allowed headers for API routes
   async headers() {
@@ -32,15 +36,6 @@ const nextConfig: NextConfig = {
         ],
       },
     ];
-  },
-
-  // Webpack configuration for server-side packages
-  webpack: (config, { isServer }) => {
-    if (isServer) {
-      // Handle pdf-parse native dependencies
-      config.externals = [...(config.externals || []), "pdf-parse"];
-    }
-    return config;
   },
 
   // Environment variables that should be available on the client
