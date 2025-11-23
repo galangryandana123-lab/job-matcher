@@ -64,12 +64,11 @@ export async function POST(req: NextRequest) {
       { status: 201 }
     )
   } catch (error) {
-    // Log error only in development
-    if (process.env.NODE_ENV === "development") {
-      console.error("Registration error:", error)
-    }
+    console.error("Registration error:", error)
+    // Return detailed error for debugging
+    const errorMessage = error instanceof Error ? error.message : "Unknown error"
     return NextResponse.json(
-      { error: "Registration failed. Please try again later." },
+      { error: "Registration failed", details: errorMessage },
       { status: 500 }
     )
   }
