@@ -1,17 +1,20 @@
 import { NextRequest, NextResponse } from "next/server"
 import bcrypt from "bcryptjs"
 import { db } from "@/lib/db"
-import { z } from "zod"
-
-const registerSchema = z.object({
-  name: z.string().min(2, "Name must be at least 2 characters"),
-  email: z.string().email("Invalid email address"),
-  password: z.string().min(6, "Password must be at least 6 characters"),
-})
+import { registerSchema } from "@/lib/validations"
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json()
+    // Parse and validate body
+    let body
+    try {
+      body = await req.json()
+    } catch {
+      return NextResponse.json(
+        { error: "Invalid JSON body" },
+        { status: 400 }
+      )
+    }
 
     const validation = registerSchema.safeParse(body)
     if (!validation.success) {
@@ -25,24 +28,25 @@ export async function POST(req: NextRequest) {
 
     // Check if user already exists
     const existingUser = await db.user.findUnique({
-      where: { email },
+      where: { email: email.toLowerCase().trim() },
     })
 
     if (existingUser) {
+      // Generic message to prevent email enumeration
       return NextResponse.json(
-        { error: "Email already registered" },
+        { error: "Registration failed. Please try again." },
         { status: 400 }
       )
     }
 
-    // Hash password
+    // Hash password with bcrypt (cost factor 12)
     const hashedPassword = await bcrypt.hash(password, 12)
 
     // Create user
     const user = await db.user.create({
       data: {
-        name,
-        email,
+        name: name.trim(),
+        email: email.toLowerCase().trim(),
         password: hashedPassword,
       },
     })
@@ -60,9 +64,12 @@ export async function POST(req: NextRequest) {
       { status: 201 }
     )
   } catch (error) {
-    console.error("Registration error:", error)
+    // Log error only in development
+    if (process.env.NODE_ENV === "development") {
+      console.error("Registration error:", error)
+    }
     return NextResponse.json(
-      { error: "Internal server error" },
+      { error: "Registration failed. Please try again later." },
       { status: 500 }
     )
   }

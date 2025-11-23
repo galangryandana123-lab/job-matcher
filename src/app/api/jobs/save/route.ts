@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getAuthSession } from "@/lib/auth"
 import { db } from "@/lib/db"
+import { saveJobSchema, validateId } from "@/lib/validations"
 
 export async function GET() {
   try {
@@ -17,6 +18,7 @@ export async function GET() {
       where: { userId: session.user.id },
       include: { job: true },
       orderBy: { savedAt: "desc" },
+      take: 100, // Limit results
     })
 
     return NextResponse.json({
@@ -24,9 +26,11 @@ export async function GET() {
       data: savedJobs,
     })
   } catch (error) {
-    console.error("Get saved jobs error:", error)
+    if (process.env.NODE_ENV === "development") {
+      console.error("Get saved jobs error:", error)
+    }
     return NextResponse.json(
-      { error: "Internal server error" },
+      { error: "Failed to fetch saved jobs" },
       { status: 500 }
     )
   }
@@ -43,11 +47,31 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    const { jobId, notes } = await req.json()
-
-    if (!jobId) {
+    // Parse and validate body
+    let body
+    try {
+      body = await req.json()
+    } catch {
       return NextResponse.json(
-        { error: "Job ID is required" },
+        { error: "Invalid JSON body" },
+        { status: 400 }
+      )
+    }
+
+    const validationResult = saveJobSchema.safeParse(body)
+    if (!validationResult.success) {
+      return NextResponse.json(
+        { error: validationResult.error.issues[0].message },
+        { status: 400 }
+      )
+    }
+
+    const { jobId, notes } = validationResult.data
+
+    // Validate jobId format
+    if (!validateId(jobId)) {
+      return NextResponse.json(
+        { error: "Invalid job ID format" },
         { status: 400 }
       )
     }
@@ -55,6 +79,7 @@ export async function POST(req: NextRequest) {
     // Check if job exists
     const job = await db.job.findUnique({
       where: { id: jobId },
+      select: { id: true, isActive: true },
     })
 
     if (!job) {
@@ -64,40 +89,53 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // Check if already saved
-    const existing = await db.savedJob.findUnique({
-      where: {
-        userId_jobId: {
-          userId: session.user.id,
-          jobId,
-        },
-      },
-    })
-
-    if (existing) {
+    if (!job.isActive) {
       return NextResponse.json(
-        { error: "Job already saved" },
+        { error: "This job is no longer active" },
         { status: 400 }
       )
     }
 
-    const savedJob = await db.savedJob.create({
-      data: {
-        userId: session.user.id,
-        jobId,
-        notes,
-      },
-      include: { job: true },
-    })
+    // Use upsert to handle race conditions
+    // If already exists, just return success without error
+    try {
+      const savedJob = await db.savedJob.upsert({
+        where: {
+          userId_jobId: {
+            userId: session.user.id,
+            jobId,
+          },
+        },
+        create: {
+          userId: session.user.id,
+          jobId,
+          notes: notes?.trim().slice(0, 1000) || null,
+        },
+        update: {
+          notes: notes?.trim().slice(0, 1000) || null,
+        },
+        include: { job: true },
+      })
 
-    return NextResponse.json({
-      success: true,
-      data: savedJob,
-    })
+      return NextResponse.json({
+        success: true,
+        data: savedJob,
+      })
+    } catch (dbError) {
+      if (process.env.NODE_ENV === "development") {
+        console.error("Save job DB error:", dbError)
+      }
+      return NextResponse.json(
+        { error: "Failed to save job" },
+        { status: 500 }
+      )
+    }
   } catch (error) {
-    console.error("Save job error:", error)
+    if (process.env.NODE_ENV === "development") {
+      console.error("Save job error:", error)
+    }
     return NextResponse.json(
-      { error: "Internal server error" },
+      { error: "Failed to save job" },
       { status: 500 }
     )
   }
@@ -124,6 +162,32 @@ export async function DELETE(req: NextRequest) {
       )
     }
 
+    // Validate jobId format
+    if (!validateId(jobId)) {
+      return NextResponse.json(
+        { error: "Invalid job ID format" },
+        { status: 400 }
+      )
+    }
+
+    // Check if saved job exists first
+    const existingSave = await db.savedJob.findUnique({
+      where: {
+        userId_jobId: {
+          userId: session.user.id,
+          jobId,
+        },
+      },
+    })
+
+    if (!existingSave) {
+      // Already unsaved, return success
+      return NextResponse.json({
+        success: true,
+        message: "Job unsaved successfully",
+      })
+    }
+
     await db.savedJob.delete({
       where: {
         userId_jobId: {
@@ -138,9 +202,11 @@ export async function DELETE(req: NextRequest) {
       message: "Job unsaved successfully",
     })
   } catch (error) {
-    console.error("Unsave job error:", error)
+    if (process.env.NODE_ENV === "development") {
+      console.error("Unsave job error:", error)
+    }
     return NextResponse.json(
-      { error: "Internal server error" },
+      { error: "Failed to unsave job" },
       { status: 500 }
     )
   }
