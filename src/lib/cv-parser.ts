@@ -1,9 +1,7 @@
-import OpenAI from 'openai'
+import { GoogleGenerativeAI } from '@google/generative-ai'
 import { ParsedCV } from '@/types'
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-})
+const genAI = new GoogleGenerativeAI(process.env.GOOGLE_AI_API_KEY || '')
 
 const CV_PARSING_PROMPT = `You are an expert CV/Resume parser. Analyze the following CV text and extract structured information.
 
@@ -68,29 +66,41 @@ CV Text:
 
 export async function parseCV(cvText: string): Promise<ParsedCV> {
   try {
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "system",
-          content: "You are a professional CV parser. Always respond with valid JSON only."
-        },
-        {
-          role: "user",
-          content: CV_PARSING_PROMPT + cvText
-        }
-      ],
-      temperature: 0.1,
-      max_tokens: 4000,
-      response_format: { type: "json_object" }
+    const model = genAI.getGenerativeModel({
+      model: "gemini-1.5-flash",
+      generationConfig: {
+        temperature: 0.1,
+        maxOutputTokens: 4000,
+        responseMimeType: "application/json",
+      }
     })
 
-    const content = response.choices[0]?.message?.content
+    const result = await model.generateContent([
+      "You are a professional CV parser. Always respond with valid JSON only.",
+      CV_PARSING_PROMPT + cvText
+    ])
+
+    const response = result.response
+    const content = response.text()
+
     if (!content) {
-      throw new Error("No response from OpenAI")
+      throw new Error("No response from Gemini")
     }
 
-    const parsed = JSON.parse(content)
+    // Clean the response in case it has markdown code blocks
+    let jsonContent = content.trim()
+    if (jsonContent.startsWith('```json')) {
+      jsonContent = jsonContent.slice(7)
+    }
+    if (jsonContent.startsWith('```')) {
+      jsonContent = jsonContent.slice(3)
+    }
+    if (jsonContent.endsWith('```')) {
+      jsonContent = jsonContent.slice(0, -3)
+    }
+    jsonContent = jsonContent.trim()
+
+    const parsed = JSON.parse(jsonContent)
 
     return {
       fullName: parsed.fullName || "",

@@ -1,8 +1,6 @@
-import OpenAI from 'openai'
+import { GoogleGenerativeAI } from '@google/generative-ai'
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-})
+const genAI = new GoogleGenerativeAI(process.env.GOOGLE_AI_API_KEY || '')
 
 export interface ScrapedJob {
   title: string
@@ -94,7 +92,7 @@ Each job object should have:
   "applicationDeadline": "ISO date string or null"
 }
 
-Extract as many jobs as you can find. Return ONLY valid JSON array.
+Extract as many jobs as you can find. Return ONLY valid JSON with a "jobs" array.
 
 Content:
 `
@@ -111,29 +109,41 @@ export async function scrapeJobPortal(
       return getSampleJobs(portalName)
     }
 
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "system",
-          content: "You are a job listing extractor. Always respond with valid JSON array only."
-        },
-        {
-          role: "user",
-          content: JOB_EXTRACTION_PROMPT + firecrawlResult.data.markdown
-        }
-      ],
-      temperature: 0.1,
-      max_tokens: 4000,
-      response_format: { type: "json_object" }
+    const model = genAI.getGenerativeModel({
+      model: "gemini-1.5-flash",
+      generationConfig: {
+        temperature: 0.1,
+        maxOutputTokens: 4000,
+        responseMimeType: "application/json",
+      }
     })
 
-    const content = response.choices[0]?.message?.content
+    const result = await model.generateContent([
+      "You are a job listing extractor. Always respond with valid JSON only.",
+      JOB_EXTRACTION_PROMPT + firecrawlResult.data.markdown
+    ])
+
+    const response = result.response
+    const content = response.text()
+
     if (!content) {
       return getSampleJobs(portalName)
     }
 
-    const parsed = JSON.parse(content)
+    // Clean the response in case it has markdown code blocks
+    let jsonContent = content.trim()
+    if (jsonContent.startsWith('```json')) {
+      jsonContent = jsonContent.slice(7)
+    }
+    if (jsonContent.startsWith('```')) {
+      jsonContent = jsonContent.slice(3)
+    }
+    if (jsonContent.endsWith('```')) {
+      jsonContent = jsonContent.slice(0, -3)
+    }
+    jsonContent = jsonContent.trim()
+
+    const parsed = JSON.parse(jsonContent)
     const jobs: ScrapedJob[] = (parsed.jobs || parsed || []).map((job: Record<string, unknown>) => ({
       title: job.title as string,
       companyName: job.companyName as string,
